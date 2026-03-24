@@ -843,6 +843,18 @@ function VueFiscalite({ rows, sim }) {
 
   const activeScenario = scenarios.find(s => s.id === modeRetrait);
 
+  const kpiItems = modeRetrait === "total_fin" ? [
+    { icon: "💰", label: "Capital brut final",     value: fmt(capitalFinal) + " €",   color: "#38bdf8" },
+    { icon: "📈", label: "Gains bruts totaux",     value: "+" + fmt(gainsTotaux) + " €", color: "#4ade80" },
+    { icon: "🏛️", label: "Impôt total (" + tauxFiscal + "%)", value: "−" + fmt(impotFinal) + " €", color: "#f87171" },
+    { icon: "✅", label: "Net encaissé",           value: "+" + fmt(netFinal) + " €", color: "#f59e0b" },
+  ] : [
+    { icon: "💰", label: "Capital restant",        value: fmt(lastF.capitalNet) + " €",   color: "#38bdf8" },
+    { icon: "✅", label: "Total net encaissé",     value: "+" + fmt(lastF.totalRetraits) + " €", color: "#4ade80" },
+    { icon: "🏛️", label: "Total impôts payés",    value: "−" + fmt(lastF.totalImpots) + " €",   color: "#f87171" },
+    { icon: "📊", label: "Taux effectif réel",     value: lastF.totalImpots > 0 ? fmtD(lastF.totalImpots / (lastF.totalRetraits + lastF.totalImpots) * 100) + "%" : "0%", color: "#f59e0b" },
+  ];
+
   return (
     <div style={{ color: "#e2e8f0" }}>
 
@@ -909,17 +921,7 @@ function VueFiscalite({ rows, sim }) {
 
       {/* KPIs selon scénario */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, padding: "16px 22px 0" }}>
-        {modeRetrait === "total_fin" ? [
-          { icon: "💰", label: "Capital brut final",     value: fmt(capitalFinal) + " €",   color: "#38bdf8" },
-          { icon: "📈", label: "Gains bruts totaux",     value: "+" + fmt(gainsTotaux) + " €", color: "#4ade80" },
-          { icon: "🏛️", label: "Impôt total (" + tauxFiscal + "%)", value: "−" + fmt(impotFinal) + " €", color: "#f87171" },
-          { icon: "✅", label: "Net encaissé",           value: "+" + fmt(netFinal) + " €", color: "#f59e0b" },
-        ] : [
-          { icon: "💰", label: "Capital restant",        value: fmt(lastF.capitalNet) + " €",   color: "#38bdf8" },
-          { icon: "✅", label: "Total net encaissé",     value: "+" + fmt(lastF.totalRetraits) + " €", color: "#4ade80" },
-          { icon: "🏛️", label: "Total impôts payés",    value: "−" + fmt(lastF.totalImpots) + " €",   color: "#f87171" },
-          { icon: "📊", label: "Taux effectif réel",     value: lastF.totalImpots > 0 ? fmtD(lastF.totalImpots / (lastF.totalRetraits + lastF.totalImpots) * 100) + "%" : "0%", color: "#f59e0b" },
-        ]}.map(k => (
+        {kpiItems.map(k => (
           <div key={k.label} style={{ background: "#0f1923", border: "1px solid #1e3a5f", borderRadius: 10, padding: "12px 14px", display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{ fontSize: 22 }}>{k.icon}</div>
             <div>
