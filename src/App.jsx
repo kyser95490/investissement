@@ -809,13 +809,20 @@ function VueFiscalite({ rows, sim }) {
   const fmt2 = n => fmt(Math.abs(n));
 
   // Données pour le graphique comparatif
-  const chartData = sim.map((d, i) => ({
-    mois:       d.mois,
-    brut:       d.capital,
-    apresImpot: simFiscal[i].capitalNet,
-    impotCumul: simFiscal[i].totalImpots,
-    netRetire:  simFiscal[i].totalRetraits,
-  }));
+  const chartData = sim.map((d, i) => {
+    const f = simFiscal[i];
+    const impotSurCapitalRestant = Math.round(Math.max(0, f.capitalNet - d.totalVerse) * taux);
+    const netTotal = f.capitalNet - impotSurCapitalRestant + f.totalRetraits;
+    return {
+      mois:       d.mois,
+      brut:       d.capital,
+      apresImpot: f.capitalNet,
+      impotCumul: f.totalImpots,
+      netRetire:  f.totalRetraits,
+      totalVerse: d.totalVerse,
+      netTotal:   Math.round(netTotal),
+    };
+  });
 
   const scenarios = [
     {
@@ -930,6 +937,92 @@ function VueFiscalite({ rows, sim }) {
             </div>
           </div>
         ))}
+      </div>
+
+      {/* VISUEL NET SI TOUT RETIRÉ */}
+      <div style={{ margin: "14px 22px 0", background: "#0f1923", border: "1px solid #1e3a5f", borderRadius: 12, padding: "16px 20px" }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#f59e0b", marginBottom: 14 }}>
+          💰 Net récupérable si tout retiré à ce mois — Capital + Gains nets − Impôts
+        </div>
+        <ResponsiveContainer width="100%" height={220}>
+          <ComposedChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" vertical={false}/>
+            <XAxis dataKey="mois" stroke="#475569" tick={{ fontSize: 9 }} interval={5}/>
+            <YAxis stroke="#475569" tick={{ fontSize: 9 }} tickFormatter={v => v >= 1000 ? (v/1000).toFixed(0)+"k" : v}/>
+            <Tooltip
+              contentStyle={{ background: "#0a1628", border: "1px solid #1e3a5f", borderRadius: 10, fontSize: 12 }}
+              formatter={(value, name) => {
+                const labels = {
+                  totalVerse: "Apports versés",
+                  brut: "Capital brut",
+                  netTotal: "Net encaissable (capital + gains − impôts)",
+                };
+                return [fmt(value) + " €", labels[name] || name];
+              }}
+              labelStyle={{ color: "#38bdf8", fontWeight: 700, marginBottom: 4 }}
+            />
+            {/* Apports versés — ligne de référence grise */}
+            <Line type="monotone" dataKey="totalVerse" stroke="#475569" strokeWidth={1.5} dot={false} strokeDasharray="4 3" name="totalVerse"/>
+            {/* Capital brut — ligne bleue en pointillés */}
+            <Line type="monotone" dataKey="brut" stroke="#38bdf8" strokeWidth={1.5} dot={false} strokeDasharray="5 3" name="brut" opacity={0.5}/>
+            {/* Net total récupérable — zone remplie dorée, la valeur clé */}
+            <Area type="monotone" dataKey="netTotal" stroke="#f59e0b" strokeWidth={2.5} fill="#f59e0b" fillOpacity={0.15} dot={false} name="netTotal"/>
+            <ReferenceLine y={0} stroke="#334155" strokeWidth={1}/>
+          </ComposedChart>
+        </ResponsiveContainer>
+
+        {/* Légende manuelle */}
+        <div style={{ display: "flex", gap: 20, marginTop: 8, fontSize: 11, flexWrap: "wrap" }}>
+          {[
+            { color: "#f59e0b", label: "Net encaissable (capital + gains − impôts)", dash: false },
+            { color: "#38bdf8", label: "Capital brut", dash: true },
+            { color: "#475569", label: "Total versé", dash: true },
+          ].map(({ color, label, dash }) => (
+            <div key={label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <svg width="22" height="10">
+                {dash
+                  ? <line x1="0" y1="5" x2="22" y2="5" stroke={color} strokeWidth="1.5" strokeDasharray="4 3"/>
+                  : <line x1="0" y1="5" x2="22" y2="5" stroke={color} strokeWidth="2.5"/>
+                }
+              </svg>
+              <span style={{ color: "#64748b" }}>{label}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Chiffre clé final */}
+        {(() => {
+          const dernierPoint = chartData[chartData.length - 1];
+          const gain = dernierPoint ? dernierPoint.netTotal - dernierPoint.totalVerse : 0;
+          return (
+            <div style={{ marginTop: 14, background: "#0a1628", border: "1px solid #f59e0b30", borderRadius: 10, padding: "12px 16px", display: "flex", gap: 24, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: 10, color: "#64748b", marginBottom: 3 }}>Net encaissable final</div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: "#f59e0b" }}>
+                  {dernierPoint ? fmt(dernierPoint.netTotal) + " €" : "—"}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: "#64748b", marginBottom: 3 }}>Dont apports versés</div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: "#94a3b8" }}>
+                  {dernierPoint ? fmt(dernierPoint.totalVerse) + " €" : "—"}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: "#64748b", marginBottom: 3 }}>Gains nets après impôts</div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: gain >= 0 ? "#4ade80" : "#f87171" }}>
+                  {gain >= 0 ? "+" : ""}{fmt(gain)} €
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: "#64748b", marginBottom: 3 }}>Impôts payés ({tauxFiscal}%)</div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: "#f87171" }}>
+                  {dernierPoint ? "−" + fmt(dernierPoint.impotCumul) + " €" : "—"}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* GRAPHIQUE COMPARATIF */}
