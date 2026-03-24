@@ -171,7 +171,7 @@ export default function App() {
         <div style={{ color: "#38bdf8", fontWeight: 900, fontSize: 15, marginRight: 28, display: "flex", alignItems: "center", letterSpacing: -0.5 }}>
           ECA
         </div>
-        {[["mensuel", "📈 Vue mensuelle", "70 mois · Mar 26→Déc 31"], ["annuel", "📊 Vue annuelle", "Par année"]].map(([id, lbl, sub]) => (
+        {[["mensuel", "📈 Vue mensuelle", "70 mois · Mar 26→Déc 31"], ["annuel", "📊 Vue annuelle", "Par année"], ["fiscalite", "💸 Fiscalité", "Flat tax 30%"]].map(([id, lbl, sub]) => (
           <button key={id} onClick={() => setView(id)} style={{
             background: "transparent", border: "none",
             borderBottom: view === id ? "3px solid #38bdf8" : "3px solid transparent",
@@ -190,8 +190,9 @@ export default function App() {
         </div>
       </div>
 
-      {view === "mensuel" && <VueMensuelle {...sharedProps} />}
-      {view === "annuel"  && <VueAnnuelle  {...sharedProps} />}
+      {view === "mensuel"   && <VueMensuelle  {...sharedProps} />}
+      {view === "annuel"    && <VueAnnuelle   {...sharedProps} />}
+      {view === "fiscalite" && <VueFiscalite  {...sharedProps} />}
     </div>
   );
 }
@@ -714,6 +715,345 @@ function VueAnnuelle({ rows, sim, commit, showToast }) {
             </tbody>
           </table>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// VUE FISCALITÉ — Flat Tax 30%
+// Scénario : retrait mensuel des gains nets, après 30% PFU
+// ═══════════════════════════════════════════════════════
+function VueFiscalite({ rows, sim }) {
+  const FLAT_TAX = 0.30;
+  const [tauxFiscal, setTauxFiscal] = useState(30); // modifiable
+  const [modeRetrait, setModeRetrait] = useState("gains"); // "gains" | "partiel" | "total_fin"
+  const [retraitPartiel, setRetraitPartiel] = useState(500);
+
+  const taux = tauxFiscal / 100;
+
+  // Simulation avec retrait fiscal mensuel
+  const simFiscal = useMemo(() => {
+    let cagnotte      = 0;
+    let capitalActif  = CAPITAL_DEPART;
+    let totalVerse    = CAPITAL_DEPART;
+    let totalRetraits = 0;
+    let totalImpots   = 0;
+
+    return rows.map((row, i) => {
+      const gains = Math.round(capitalActif * (row.taux / 100));
+      cagnotte   += gains + row.apport + row.ponctuel;
+      totalVerse += row.apport + row.ponctuel;
+
+      const nouveauxPacks = Math.floor(cagnotte / 1000);
+      const resteCagnotte = cagnotte - nouveauxPacks * 1000;
+      const nouveauCapital = capitalActif + nouveauxPacks * 1000;
+      const capitalBrut    = nouveauCapital + resteCagnotte;
+
+      if (nouveauxPacks > 0) { cagnotte = resteCagnotte; capitalActif = nouveauCapital; }
+
+      // Calcul du retrait selon le mode
+      let retrait = 0;
+      let impot   = 0;
+      let netRetire = 0;
+
+      if (modeRetrait === "gains") {
+        // On retire les gains bruts du mois → impôt sur la plus-value
+        const plusValue = Math.max(0, gains); // gains = plus-value mensuelle
+        impot     = Math.round(plusValue * taux);
+        retrait   = gains;
+        netRetire = retrait - impot;
+      } else if (modeRetrait === "partiel") {
+        // Retrait fixe mensuel → on calcule la part de plus-value
+        retrait   = Math.min(retraitPartiel, Math.max(0, capitalBrut - totalVerse));
+        impot     = Math.round(retrait * taux);
+        netRetire = retrait - impot;
+      }
+      // "total_fin" calculé séparément en dehors de la boucle
+
+      totalRetraits += netRetire;
+      totalImpots   += impot;
+
+      // Capital après retrait (on ne retire QUE le net, l'impôt est prélevé)
+      const capitalApresRetrait = capitalBrut - retrait;
+      const gainsNets = Math.round(capitalBrut - totalVerse);
+      const perf = totalVerse > 0 ? Math.round(((capitalApresRetrait - totalVerse) / totalVerse) * 1000) / 10 : 0;
+
+      return {
+        mois: row.mois,
+        capitalBrut:    Math.round(capitalBrut),
+        capitalNet:     Math.round(capitalApresRetrait),
+        gains,
+        impot,
+        netRetire,
+        totalRetraits:  Math.round(totalRetraits),
+        totalImpots:    Math.round(totalImpots),
+        gainsNets,
+        perf,
+        nouveauxPacks,
+        taux: row.taux,
+      };
+    });
+  }, [rows, taux, modeRetrait, retraitPartiel]);
+
+  const last     = sim[sim.length - 1];       // simulation brute (sans retrait)
+  const lastF    = simFiscal[simFiscal.length - 1];
+
+  // Calcul du retrait total à la fin (scénario tout retirer en une fois)
+  const gainsTotaux   = last.gainsNets;
+  const impotFinal    = Math.round(gainsTotaux * taux);
+  const netFinal      = gainsTotaux - impotFinal;
+  const capitalFinal  = last.capital;
+  const capitalApport = last.totalVerse;
+
+  const fmt2 = n => fmt(Math.abs(n));
+
+  // Données pour le graphique comparatif
+  const chartData = sim.map((d, i) => ({
+    mois:       d.mois,
+    brut:       d.capital,
+    apresImpot: simFiscal[i].capitalNet,
+    impotCumul: simFiscal[i].totalImpots,
+    netRetire:  simFiscal[i].totalRetraits,
+  }));
+
+  const scenarios = [
+    {
+      id: "gains",
+      label: "Retrait mensuel des gains",
+      desc: "Chaque mois, vous retirez tous les gains générés. Flat tax prélevée sur chaque retrait.",
+      icon: "📅",
+      color: "#38bdf8",
+    },
+    {
+      id: "partiel",
+      label: "Retrait mensuel fixe",
+      desc: "Vous retirez un montant fixe chaque mois (si disponible en plus-value).",
+      icon: "💳",
+      color: "#a78bfa",
+    },
+    {
+      id: "total_fin",
+      label: "Tout retirer en fin de période",
+      desc: "Pas de retrait mensuel. On calcule l'impôt sur la totalité des gains à la fin.",
+      icon: "🏁",
+      color: "#4ade80",
+    },
+  ];
+
+  const activeScenario = scenarios.find(s => s.id === modeRetrait);
+
+  return (
+    <div style={{ color: "#e2e8f0" }}>
+
+      {/* HEADER */}
+      <div style={{ background: "linear-gradient(135deg,#1a0a0a,#2d1515)", borderBottom: "1px solid #7f1d1d", padding: "14px 22px" }}>
+        <div style={{ fontSize: 16, fontWeight: 800, color: "#f87171" }}>💸 Fiscalité — Flat Tax (PFU)</div>
+        <div style={{ color: "#6b3030", fontSize: 11, marginTop: 2 }}>
+          Simulation de vos gains nets après imposition · basée sur vos données de la vue mensuelle
+        </div>
+      </div>
+
+      {/* TAUX FISCAL + SCÉNARIO */}
+      <div style={{ display: "flex", gap: 14, padding: "16px 22px 0", flexWrap: "wrap", alignItems: "stretch" }}>
+
+        {/* Taux fiscal */}
+        <div style={{ background: "#0f1923", border: "1px solid #7f1d1d", borderRadius: 10, padding: "14px 18px", display: "flex", alignItems: "center", gap: 14, minWidth: 260 }}>
+          <div>
+            <div style={{ color: "#f87171", fontWeight: 700, fontSize: 12, marginBottom: 6 }}>⚖️ Taux d'imposition (PFU)</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <input type="range" min="0" max="50" step="1" value={tauxFiscal}
+                onChange={e => setTauxFiscal(Number(e.target.value))}
+                style={{ width: 100, accentColor: "#f87171", cursor: "pointer" }} />
+              <input type="number" min="0" max="50" value={tauxFiscal}
+                onChange={e => setTauxFiscal(Math.min(50, Math.max(0, Number(e.target.value))))}
+                style={{ width: 52, background: "#060d14", border: "1px solid #f87171", borderRadius: 8, color: "#f87171", padding: "5px 8px", fontSize: 18, fontWeight: 800, textAlign: "center", outline: "none" }} />
+              <span style={{ color: "#f87171", fontWeight: 800, fontSize: 18 }}>%</span>
+            </div>
+            <div style={{ fontSize: 10, color: "#6b3030", marginTop: 4 }}>
+              Flat Tax française (PFU) = 30% · modifiable
+            </div>
+          </div>
+        </div>
+
+        {/* Scénarios */}
+        <div style={{ display: "flex", gap: 10, flex: 1, flexWrap: "wrap" }}>
+          {scenarios.map(s => (
+            <button key={s.id} onClick={() => setModeRetrait(s.id)}
+              style={{ flex: 1, minWidth: 160, background: modeRetrait === s.id ? "#0d2137" : "#0f1923", border: `1.5px solid ${modeRetrait === s.id ? s.color : "#1e3a5f"}`, borderRadius: 10, padding: "12px 14px", cursor: "pointer", textAlign: "left", transition: "all 0.15s" }}>
+              <div style={{ fontSize: 18, marginBottom: 4 }}>{s.icon}</div>
+              <div style={{ color: modeRetrait === s.id ? s.color : "#94a3b8", fontWeight: 700, fontSize: 12 }}>{s.label}</div>
+              <div style={{ color: "#475569", fontSize: 10, marginTop: 3, lineHeight: 1.4 }}>{s.desc}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Retrait partiel — montant */}
+      {modeRetrait === "partiel" && (
+        <div style={{ margin: "12px 22px 0", background: "#0f1923", border: "1px solid #a78bfa", borderRadius: 10, padding: "12px 18px", display: "flex", alignItems: "center", gap: 14 }}>
+          <span style={{ color: "#a78bfa", fontSize: 12, fontWeight: 700 }}>💳 Montant retiré chaque mois :</span>
+          <input type="number" min="0" value={retraitPartiel} onChange={e => setRetraitPartiel(Number(e.target.value) || 0)}
+            style={{ width: 90, background: "#060d14", border: "1px solid #a78bfa", borderRadius: 8, color: "#a78bfa", padding: "6px 10px", fontSize: 16, fontWeight: 800, textAlign: "right", outline: "none" }} />
+          <span style={{ color: "#a78bfa", fontWeight: 800 }}>€</span>
+          <div style={{ display: "flex", gap: 6 }}>
+            {[100, 200, 500, 1000].map(v => (
+              <button key={v} onClick={() => setRetraitPartiel(v)}
+                style={{ background: retraitPartiel === v ? "#312e81" : "#1e3a5f", border: "1px solid #3730a3", borderRadius: 6, color: "#a78bfa", padding: "4px 10px", cursor: "pointer", fontSize: 11, fontWeight: 700 }}>
+                {fmt(v)} €
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* KPIs selon scénario */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, padding: "16px 22px 0" }}>
+        {modeRetrait === "total_fin" ? [
+          { icon: "💰", label: "Capital brut final",     value: fmt(capitalFinal) + " €",   color: "#38bdf8" },
+          { icon: "📈", label: "Gains bruts totaux",     value: "+" + fmt(gainsTotaux) + " €", color: "#4ade80" },
+          { icon: "🏛️", label: "Impôt total (" + tauxFiscal + "%)", value: "−" + fmt(impotFinal) + " €", color: "#f87171" },
+          { icon: "✅", label: "Net encaissé",           value: "+" + fmt(netFinal) + " €", color: "#f59e0b" },
+        ] : [
+          { icon: "💰", label: "Capital restant",        value: fmt(lastF.capitalNet) + " €",   color: "#38bdf8" },
+          { icon: "✅", label: "Total net encaissé",     value: "+" + fmt(lastF.totalRetraits) + " €", color: "#4ade80" },
+          { icon: "🏛️", label: "Total impôts payés",    value: "−" + fmt(lastF.totalImpots) + " €",   color: "#f87171" },
+          { icon: "📊", label: "Taux effectif réel",     value: lastF.totalImpots > 0 ? fmtD(lastF.totalImpots / (lastF.totalRetraits + lastF.totalImpots) * 100) + "%" : "0%", color: "#f59e0b" },
+        ]}.map(k => (
+          <div key={k.label} style={{ background: "#0f1923", border: "1px solid #1e3a5f", borderRadius: 10, padding: "12px 14px", display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ fontSize: 22 }}>{k.icon}</div>
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: k.color }}>{k.value}</div>
+              <div style={{ fontSize: 10, color: "#64748b" }}>{k.label}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* GRAPHIQUE COMPARATIF */}
+      {modeRetrait !== "total_fin" && (
+        <div style={{ margin: "14px 22px 0", background: "#0f1923", border: "1px solid #1e3a5f", borderRadius: 12, padding: "16px 12px 8px" }}>
+          <div style={{ marginBottom: 8, fontSize: 12, color: "#64748b" }}>
+            <b style={{ color: "#94a3b8" }}>Capital brut vs net après impôts</b>
+            <span style={{ marginLeft: 12 }}><span style={{ color: "#38bdf8" }}>■</span> Capital brut</span>
+            <span style={{ marginLeft: 10 }}><span style={{ color: "#4ade80" }}>■</span> Capital après retraits</span>
+            <span style={{ marginLeft: 10 }}><span style={{ color: "#f87171" }}>■</span> Impôts cumulés</span>
+          </div>
+          <ResponsiveContainer width="100%" height={260}>
+            <AreaChart data={chartData}>
+              <defs>
+                <linearGradient id="gBrut"  x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#38bdf8" stopOpacity={0.2}/><stop offset="95%" stopColor="#38bdf8" stopOpacity={0}/></linearGradient>
+                <linearGradient id="gNet"   x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#4ade80" stopOpacity={0.2}/><stop offset="95%" stopColor="#4ade80" stopOpacity={0}/></linearGradient>
+                <linearGradient id="gImpot" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#f87171" stopOpacity={0.3}/><stop offset="95%" stopColor="#f87171" stopOpacity={0}/></linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" vertical={false}/>
+              <XAxis dataKey="mois" stroke="#475569" tick={{ fontSize: 9 }} interval={5}/>
+              <YAxis stroke="#475569" tick={{ fontSize: 9 }} tickFormatter={v => v >= 1000 ? (v/1000).toFixed(0)+"k" : v}/>
+              <Tooltip
+                contentStyle={{ background: "#0a1628", border: "1px solid #1e3a5f", borderRadius: 10, fontSize: 12 }}
+                formatter={(value, name) => {
+                  const labels = { brut: "Capital brut", apresImpot: "Capital après retraits", impotCumul: "Impôts cumulés", netRetire: "Net encaissé total" };
+                  return [fmt(value) + " €", labels[name] || name];
+                }}
+              />
+              <Area type="monotone" dataKey="brut"       stroke="#38bdf8" strokeWidth={1.5} fill="url(#gBrut)"  strokeDasharray="5 3"/>
+              <Area type="monotone" dataKey="apresImpot" stroke="#4ade80" strokeWidth={2}   fill="url(#gNet)"/>
+              <Area type="monotone" dataKey="impotCumul" stroke="#f87171" strokeWidth={1.5} fill="url(#gImpot)"/>
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* TABLEAU ANNUEL FISCAL */}
+      <div style={{ margin: "14px 22px 24px", background: "#0f1923", border: "1px solid #1e3a5f", borderRadius: 12, overflow: "hidden" }}>
+        <div style={{ padding: "10px 16px", background: "#0a1628", borderBottom: "1px solid #1e3a5f", fontSize: 12, color: "#64748b", fontWeight: 700 }}>
+          {modeRetrait === "total_fin"
+            ? "📋 Récapitulatif — Retrait unique en fin de période"
+            : "📋 Détail mensuel des retraits et impôts"}
+        </div>
+
+        {modeRetrait === "total_fin" ? (
+          /* Tableau simple scénario fin */
+          <div style={{ padding: "20px 24px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
+              {[
+                { label: "Capital de départ (versé)",        value: fmt(CAPITAL_DEPART) + " €",      color: "#64748b" },
+                { label: "Total apports versés",             value: fmt(last.totalVerse) + " €",     color: "#94a3b8" },
+                { label: "Capital brut final",               value: fmt(capitalFinal) + " €",        color: "#38bdf8" },
+                { label: "Gains bruts totaux",               value: "+" + fmt(gainsTotaux) + " €",   color: "#4ade80" },
+                { label: `Impôt PFU ${tauxFiscal}% sur gains`, value: "−" + fmt(impotFinal) + " €", color: "#f87171" },
+                { label: "Net encaissé après impôt",         value: "+" + fmt(netFinal) + " €",      color: "#f59e0b" },
+                { label: "Patrimoine final net",             value: fmt(capitalApport + netFinal) + " €", color: "#fbbf24" },
+                { label: "Performance nette",                value: fmtD(netFinal / last.totalVerse * 100) + "%", color: "#4ade80" },
+                { label: "Manque à gagner vs sans impôt",    value: "−" + fmt(impotFinal) + " €",    color: "#f87171" },
+              ].map(item => (
+                <div key={item.label} style={{ background: "#060d14", border: "1px solid #1e3a5f", borderRadius: 10, padding: "14px 16px" }}>
+                  <div style={{ color: "#64748b", fontSize: 11, marginBottom: 6 }}>{item.label}</div>
+                  <div style={{ color: item.color, fontWeight: 800, fontSize: 18 }}>{item.value}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Message récapitulatif */}
+            <div style={{ marginTop: 16, background: "#0d2137", border: "1px solid #1e3a5f", borderRadius: 10, padding: "14px 18px", fontSize: 13, lineHeight: 1.7 }}>
+              Sur <b style={{ color: "#38bdf8" }}>{fmt(gainsTotaux)} €</b> de gains bruts générés sur toute la période,
+              la flat tax à <b style={{ color: "#f87171" }}>{tauxFiscal}%</b> prélèverait{" "}
+              <b style={{ color: "#f87171" }}>{fmt(impotFinal)} €</b>.
+              Il vous resterait <b style={{ color: "#f59e0b" }}>{fmt(netFinal)} €</b> nets,
+              soit une performance nette de <b style={{ color: "#4ade80" }}>{fmtD(netFinal / last.totalVerse * 100)}%</b> sur vos apports.
+            </div>
+          </div>
+        ) : (
+          /* Tableau mensuel */
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid #1e3a5f" }}>
+                  {["Mois","Capital brut","Gains bruts","Retrait brut","Impôt ("+tauxFiscal+"%)","Net encaissé","Capital restant","Impôts cumulés","Net cumulé"].map(h => (
+                    <th key={h} style={{ padding: "8px 12px", textAlign: h==="Mois"?"left":"right", color: "#64748b", fontWeight: 700, whiteSpace: "nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {simFiscal.map((d, i) => (
+                  <tr key={d.mois}
+                    style={{ borderBottom: "1px solid #0a1220", background: d.nouveauxPacks>0?"#0d1e0d":i%2===0?"#0a1220":"transparent" }}
+                    onMouseEnter={e => e.currentTarget.style.background="#0d1e30"}
+                    onMouseLeave={e => e.currentTarget.style.background=d.nouveauxPacks>0?"#0d1e0d":i%2===0?"#0a1220":"transparent"}>
+                    <td style={{ padding: "6px 12px", color: "#94a3b8", whiteSpace: "nowrap" }}>
+                      {d.mois}{d.nouveauxPacks>0&&<span style={{color:"#3b82f6",fontSize:8,marginLeft:3}}>●</span>}
+                    </td>
+                    <td style={{ padding: "6px 12px", textAlign: "right" }}>{fmt(d.capitalBrut)} €</td>
+                    <td style={{ padding: "6px 12px", textAlign: "right", color: "#4ade80" }}>+{fmt(d.gains)} €</td>
+                    <td style={{ padding: "6px 12px", textAlign: "right", color: "#94a3b8" }}>{d.netRetire > 0 ? fmt(d.gains || retraitPartiel) + " €" : "—"}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "right", color: d.impot > 0 ? "#f87171" : "#334155", fontWeight: d.impot > 0 ? 700 : 400 }}>
+                      {d.impot > 0 ? "−" + fmt(d.impot) + " €" : "—"}
+                    </td>
+                    <td style={{ padding: "6px 12px", textAlign: "right", color: d.netRetire > 0 ? "#f59e0b" : "#334155", fontWeight: d.netRetire > 0 ? 700 : 400 }}>
+                      {d.netRetire > 0 ? "+" + fmt(d.netRetire) + " €" : "—"}
+                    </td>
+                    <td style={{ padding: "6px 12px", textAlign: "right", color: "#38bdf8" }}>{fmt(d.capitalNet)} €</td>
+                    <td style={{ padding: "6px 12px", textAlign: "right", color: "#f87171" }}>−{fmt(d.totalImpots)} €</td>
+                    <td style={{ padding: "6px 12px", textAlign: "right", color: "#f59e0b", fontWeight: 600 }}>+{fmt(d.totalRetraits)} €</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr style={{ borderTop: "2px solid #1e3a5f", background: "#0a1628" }}>
+                  <td style={{ padding: "9px 12px", color: "#38bdf8", fontWeight: 800 }}>TOTAL</td>
+                  <td style={{ padding: "9px 12px", textAlign: "right" }}></td>
+                  <td style={{ padding: "9px 12px", textAlign: "right", color: "#4ade80", fontWeight: 700 }}>+{fmt(sim.reduce((s,d)=>s+d.gains,0))} €</td>
+                  <td></td>
+                  <td style={{ padding: "9px 12px", textAlign: "right", color: "#f87171", fontWeight: 700 }}>−{fmt(lastF.totalImpots)} €</td>
+                  <td style={{ padding: "9px 12px", textAlign: "right", color: "#f59e0b", fontWeight: 700 }}>+{fmt(lastF.totalRetraits)} €</td>
+                  <td style={{ padding: "9px 12px", textAlign: "right", color: "#38bdf8", fontWeight: 700 }}>{fmt(lastF.capitalNet)} €</td>
+                  <td></td>
+                  <td></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );
